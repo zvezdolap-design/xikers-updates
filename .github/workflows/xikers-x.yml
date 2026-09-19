@@ -1,0 +1,122 @@
+name: Xikers X updates
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-x:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get repository
+        uses: actions/checkout@v4
+
+      - name: Check Xikers X
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          API_URL="https://x.pcstyle.dev/api/v1/profiles/xikers_official?format=json&nocache=true"
+
+          curl -fsSL \
+            -H "Accept: application/json" \
+            "$API_URL" \
+            -o response.json
+
+          python - <<'PY'
+          import json
+
+          with open("response.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          posts = data.get("posts", [])
+
+          if not posts:
+              print("No posts found.")
+              raise SystemExit(0)
+
+          state_file = "last_x_post.txt"
+
+          try:
+              with open(state_file, "r", encoding="utf-8") as f:
+                  last_id = f.read().strip()
+          except FileNotFoundError:
+              last_id = ""
+
+          # Берём посты с ID, новее последнего отправленного.
+          new_posts = []
+
+          for post in posts:
+              post_id = str(post.get("id", ""))
+
+              if post_id and post_id != last_id:
+                  new_posts.append(post)
+
+          if not new_posts:
+              print("No new posts.")
+              raise SystemExit(0)
+
+          # Старые из новых отправляем первыми.
+          new_posts.reverse()
+
+          import urllib.parse
+          import urllib.request
+
+          token = __import__("os").environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = __import__("os").environ["TELEGRAM_CHAT_ID"]
+
+          for post in new_posts:
+              post_id = str(post.get("id", ""))
+              text = post.get("text") or post.get("content") or ""
+              url = post.get("url") or post.get("permalink") or ""
+
+              message = "🐥 xikers / X\n\n"
+
+              if text:
+                  message += text[:3500] + "\n\n"
+
+              if url:
+                  message += url
+              elif post_id:
+                  message += f"https://x.com/xikers_official/status/{post_id}"
+
+              params = urllib.parse.urlencode({
+                  "chat_id": chat_id,
+                  "text": message
+              }).encode()
+
+              request = urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  data=params,
+                  method="POST"
+              )
+
+              with urllib.request.urlopen(request) as response:
+                  print(response.read().decode())
+
+          newest_id = str(new_posts[-1].get("id", ""))
+
+          with open(state_file, "w", encoding="utf-8") as f:
+              f.write(newest_id)
+          PY
+
+      - name: Save state
+        run: |
+          if git diff --quiet -- last_x_post.txt; then
+            echo "No state change."
+            exit 0
+          fi
+
+          git config user.name "xikers-updates-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          git add last_x_post.txt
+          git commit -m "Update last X post"
+          git push
