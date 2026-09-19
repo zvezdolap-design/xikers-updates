@@ -1,4 +1,4 @@
-name: Xikers X updates
+name: xikers updates
 
 on:
   schedule:
@@ -9,14 +9,14 @@ permissions:
   contents: write
 
 jobs:
-  check-x:
+  check-updates:
     runs-on: ubuntu-latest
 
     steps:
       - name: Get repository
         uses: actions/checkout@v4
 
-      - name: Check Xikers X
+      - name: Check X
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -28,18 +28,21 @@ jobs:
           curl -fsSL \
             -H "Accept: application/json" \
             "$API_URL" \
-            -o response.json
+            -o x_response.json
 
           python - <<'PY'
           import json
+          import os
+          import urllib.parse
+          import urllib.request
 
-          with open("response.json", "r", encoding="utf-8") as f:
+          with open("x_response.json", "r", encoding="utf-8") as f:
               data = json.load(f)
 
           posts = data.get("posts", [])
 
           if not posts:
-              print("No posts found.")
+              print("X: no posts found.")
               raise SystemExit(0)
 
           state_file = "last_x_post.txt"
@@ -50,7 +53,6 @@ jobs:
           except FileNotFoundError:
               last_id = ""
 
-          # Берём посты с ID, новее последнего отправленного.
           new_posts = []
 
           for post in posts:
@@ -60,24 +62,20 @@ jobs:
                   new_posts.append(post)
 
           if not new_posts:
-              print("No new posts.")
+              print("X: no new posts.")
               raise SystemExit(0)
 
-          # Старые из новых отправляем первыми.
           new_posts.reverse()
 
-          import urllib.parse
-          import urllib.request
-
-          token = __import__("os").environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = __import__("os").environ["TELEGRAM_CHAT_ID"]
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
           for post in new_posts:
               post_id = str(post.get("id", ""))
               text = post.get("text") or post.get("content") or ""
               url = post.get("url") or post.get("permalink") or ""
 
-              message = "🐥 xikers / X\n\n"
+              message = "🐦 xikers / X\n\n"
 
               if text:
                   message += text[:3500] + "\n\n"
@@ -107,17 +105,121 @@ jobs:
               f.write(newest_id)
           PY
 
+      - name: Check YouTube
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          RSS_URL="https://www.youtube.com/feeds/videos.xml?channel_id=UCPtC0MXSW40Qq7RkhsCXjUQ"
+
+          curl -fsSL "$RSS_URL" -o youtube_feed.xml
+
+          python - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+          import xml.etree.ElementTree as ET
+
+          state_file = "last_youtube_video.txt"
+
+          root = ET.parse("youtube_feed.xml").getroot()
+
+          ns = {
+              "atom": "http://www.w3.org/2005/Atom",
+              "yt": "http://www.youtube.com/xml/schemas/2015"
+          }
+
+          entries = root.findall("atom:entry", ns)
+
+          if not entries:
+              print("YouTube: no videos found.")
+              raise SystemExit(0)
+
+          latest = entries[0]
+
+          video_id_element = latest.find("yt:videoId", ns)
+          title_element = latest.find("atom:title", ns)
+          link_element = latest.find("atom:link", ns)
+
+          video_id = (
+              video_id_element.text.strip()
+              if video_id_element is not None and video_id_element.text
+              else ""
+          )
+
+          title = (
+              title_element.text.strip()
+              if title_element is not None and title_element.text
+              else "New video"
+          )
+
+          url = ""
+
+          if link_element is not None:
+              url = link_element.attrib.get("href", "")
+
+          if not video_id:
+              print("YouTube: could not find video ID.")
+              raise SystemExit(0)
+
+          # Первый запуск: просто запоминаем последнее видео.
+          # Это не позволит отправить тебе старые ролики пачкой.
+          try:
+              with open(state_file, "r", encoding="utf-8") as f:
+                  last_id = f.read().strip()
+          except FileNotFoundError:
+              with open(state_file, "w", encoding="utf-8") as f:
+                  f.write(video_id)
+
+              print(f"YouTube: initialized with {video_id}")
+              raise SystemExit(0)
+
+          if video_id == last_id:
+              print("YouTube: no new video.")
+              raise SystemExit(0)
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          message = (
+              "▶️ xikers / YouTube\n\n"
+              f"{title}\n\n"
+              f"{url or 'https://www.youtube.com/watch?v=' + video_id}"
+          )
+
+          params = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode()
+
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=params,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request) as response:
+              print(response.read().decode())
+
+          with open(state_file, "w", encoding="utf-8") as f:
+              f.write(video_id)
+
+          print(f"YouTube: sent {video_id}")
+          PY
+
       - name: Save state
         run: |
           git config user.name "xikers-updates-bot"
           git config user.email "actions@users.noreply.github.com"
 
-          git add last_x_post.txt
+          git add last_x_post.txt last_youtube_video.txt
 
           if git diff --cached --quiet; then
-            echo "No state change."
+            echo "No state changes."
             exit 0
           fi
 
-          git commit -m "Update last X post"
+          git commit -m "Update xikers social media state"
           git push
