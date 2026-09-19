@@ -212,12 +212,142 @@ jobs:
           print(f"YouTube: sent {video_id}")
           PY
 
+                - name: Check Instagram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          RSS_URL="https://qgesqcymfpqykxgkrxiu.supabase.co/functions/v1/serve-feed?id=6bbe9f4c-868c-4eef-b8a9-49cc5e63c566"
+
+          curl -fsSL "$RSS_URL" -o instagram_feed.xml
+
+          python - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+          import xml.etree.ElementTree as ET
+
+          state_file = "last_instagram_post.txt"
+
+          root = ET.parse("instagram_feed.xml").getroot()
+
+          ns = {
+              "atom": "http://www.w3.org/2005/Atom",
+              "content": "http://purl.org/rss/1.0/modules/content/"
+          }
+
+          entries = root.findall("atom:entry", ns)
+
+          # Некоторые RSS-фиды используют обычный RSS 2.0.
+          if not entries:
+              entries = root.findall("item")
+
+          if not entries:
+              print("Instagram: no posts found.")
+              raise SystemExit(0)
+
+          latest = entries[0]
+
+          def get_text(element, names):
+              for name in names:
+                  child = element.find(name)
+                  if child is not None and child.text:
+                      return child.text.strip()
+              return ""
+
+          post_id = get_text(
+              latest,
+              [
+                  "id",
+                  "{http://www.w3.org/2005/Atom}id",
+                  "guid"
+              ]
+          )
+
+          title = get_text(
+              latest,
+              [
+                  "title",
+                  "{http://www.w3.org/2005/Atom}title"
+              ]
+          )
+
+          url = ""
+
+          link = latest.find("link")
+
+          if link is not None:
+              url = link.attrib.get("href", "")
+              if not url and link.text:
+                  url = link.text.strip()
+
+          if not url:
+              atom_link = latest.find("{http://www.w3.org/2005/Atom}link")
+              if atom_link is not None:
+                  url = atom_link.attrib.get("href", "")
+
+          if not post_id:
+              post_id = url or title
+
+          if not post_id:
+              print("Instagram: could not identify post.")
+              raise SystemExit(0)
+
+          # Первый запуск: запоминаем последний пост,
+          # но не отправляем старые публикации.
+          try:
+              with open(state_file, "r", encoding="utf-8") as f:
+                  last_id = f.read().strip()
+          except FileNotFoundError:
+              with open(state_file, "w", encoding="utf-8") as f:
+                  f.write(post_id)
+
+              print(f"Instagram: initialized with {post_id}")
+              raise SystemExit(0)
+
+          if post_id == last_id:
+              print("Instagram: no new post.")
+              raise SystemExit(0)
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          message = "📸 xikers / Instagram\n\n"
+
+          if title:
+              message += title[:3500] + "\n\n"
+
+          if url:
+              message += url
+
+          params = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode()
+
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=params,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request) as response:
+              print(response.read().decode())
+
+          with open(state_file, "w", encoding="utf-8") as f:
+              f.write(post_id)
+
+          print(f"Instagram: sent {post_id}")
+          PY
+
       - name: Save state
         run: |
           git config user.name "xikers-updates-bot"
           git config user.email "actions@users.noreply.github.com"
 
-          git add last_x_post.txt last_youtube_video.txt
+          git add last_x_post.txt last_youtube_video.txt last_instagram_post.txt
 
           if git diff --cached --quiet; then
             echo "No state changes."
