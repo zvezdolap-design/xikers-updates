@@ -58,7 +58,10 @@ jobs:
           for post in posts:
               post_id = str(post.get("id", ""))
 
-              if post_id and post_id != last_id:
+              if not post_id:
+                  continue
+
+              if not last_id or int(post_id) > int(last_id):
                   new_posts.append(post)
 
           if not new_posts:
