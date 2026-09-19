@@ -212,7 +212,7 @@ jobs:
           print(f"YouTube: sent {video_id}")
           PY
 
-                - name: Check Instagram
+      - name: Check Instagram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
