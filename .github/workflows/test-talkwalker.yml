@@ -40,67 +40,135 @@ jobs:
               ("YUJUN SEEUN", "yujun_seeun.xml"),
           ]
 
+          blocked_words = [
+              "wts",
+              "wtb",
+              "sell",
+              "selling",
+              "photocard",
+              "photo card",
+              "포카",
+              "양도",
+              "거래",
+              "교환",
+          ]
+
+          member_names = [
+              "minjae",
+              "junmin",
+              "sumin",
+              "jinsik",
+              "hyunwoo",
+              "seeun",
+              "yujun",
+              "hunter",
+              "yechan",
+              "junghoon",
+          ]
+
+          def get_tweet_text(link):
+              match = re.search(r"/status/(\d+)", link)
+
+              if not match:
+                  return None
+
+              tweet_id = match.group(1)
+
+              url = (
+                  "https://cdn.syndication.twimg.com/tweet-result"
+                  f"?id={tweet_id}&lang=en&token=0"
+              )
+
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0",
+                      "Accept": "application/json",
+                  },
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=30
+                  ) as response:
+                      data = json.loads(
+                          response.read().decode("utf-8")
+                      )
+              except Exception as e:
+                  print("Syndication request failed:", e)
+                  return None
+
+              return data.get("text", "")
+
+
+          seen_ids = set()
+
           for feed_name, filename in feeds:
-              print("\n" + "=" * 60)
+              print("\n" + "=" * 70)
               print(feed_name)
-              print("=" * 60)
+              print("=" * 70)
 
               root = ET.parse(filename).getroot()
               items = root.findall(".//item")
 
               print(f"Found {len(items)} items.")
 
-              for index, item in enumerate(items[:5], start=1):
+              for index, item in enumerate(items[:10], start=1):
                   link = item.findtext("link", "").strip()
                   pub_date = item.findtext("pubDate", "").strip()
-
-                  print("\n---")
-                  print(f"Result #{index}")
-                  print("Talkwalker date:", pub_date)
-                  print("Talkwalker link:", link)
 
                   match = re.search(r"/status/(\d+)", link)
 
                   if not match:
-                      print("Could not find tweet ID.")
+                      print("\nSKIP: no tweet ID")
                       continue
 
                   tweet_id = match.group(1)
 
-                  syndication_url = (
-                      "https://cdn.syndication.twimg.com/tweet-result"
-                      f"?id={tweet_id}&lang=en&token=0"
-                  )
-
-                  request = urllib.request.Request(
-                      syndication_url,
-                      headers={
-                          "User-Agent": "Mozilla/5.0",
-                          "Accept": "application/json",
-                      },
-                  )
-
-                  try:
-                      with urllib.request.urlopen(
-                          request,
-                          timeout=30
-                      ) as response:
-                          data = json.loads(
-                              response.read().decode("utf-8")
-                          )
-                  except Exception as e:
-                      print("Syndication request failed:", e)
+                  if tweet_id in seen_ids:
+                      print(f"\nDUPLICATE: {tweet_id}")
                       continue
 
-                  user = data.get("user") or {}
+                  seen_ids.add(tweet_id)
 
-                  print("Author:", user.get("screen_name", ""))
-                  print("Created:", data.get("created_at", ""))
-                  print("Text:")
-                  print(data.get("text", ""))
+                  text = get_tweet_text(link)
 
-                  print(
-                      "Media:",
-                      "yes" if data.get("mediaDetails") else "no"
+                  if not text:
+                      print(f"\nUNKNOWN: {tweet_id}")
+                      continue
+
+                  normalized = text.lower()
+
+                  reasons = []
+
+                  for word in blocked_words:
+                      if word in normalized:
+                          reasons.append(f"blocked:{word}")
+
+                  member_count = sum(
+                      1
+                      for name in member_names
+                      if re.search(
+                          rf"\b{re.escape(name)}\b",
+                          normalized
+                      )
                   )
+
+                  if member_count >= 5:
+                      reasons.append(
+                          f"many-member-list:{member_count}"
+                      )
+
+                  print("\n----------------------------------------")
+                  print("Date:", pub_date)
+                  print("Author:", tweet_id)
+                  print("Text:")
+                  print(text)
+
+                  if reasons:
+                      print("RESULT: REJECT")
+                      print("WHY:", ", ".join(reasons))
+                  else:
+                      print("RESULT: KEEP")
           PY
