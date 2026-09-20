@@ -223,6 +223,10 @@ jobs:
 
           curl -fsSL "$RSS_URL" -o instagram_feed.xml
 
+          echo "===== INSTAGRAM FEED ====="
+          head -n 80 instagram_feed.xml
+          echo "===== END FEED ====="
+
           python - <<'PY'
           import os
           import urllib.parse
