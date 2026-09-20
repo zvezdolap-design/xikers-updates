@@ -223,10 +223,6 @@ jobs:
 
           curl -fsSL "$RSS_URL" -o instagram_feed.xml
 
-          echo "===== INSTAGRAM FEED ====="
-          head -n 80 instagram_feed.xml
-          echo "===== END FEED ====="
-
           python - <<'PY'
           import os
           import urllib.parse
@@ -237,70 +233,41 @@ jobs:
 
           root = ET.parse("instagram_feed.xml").getroot()
 
-          ns = {
-              "atom": "http://www.w3.org/2005/Atom",
-              "content": "http://purl.org/rss/1.0/modules/content/"
-          }
+          channel = root.find("channel")
 
-          entries = root.findall("atom:entry", ns)
+          if channel is None:
+              print("Instagram: RSS channel not found.")
+              raise SystemExit(0)
 
-          # Некоторые RSS-фиды используют обычный RSS 2.0.
-          if not entries:
-              entries = root.findall("item")
+          entries = channel.findall("item")
 
           if not entries:
               print("Instagram: no posts found.")
               raise SystemExit(0)
 
+          print(f"Instagram: found {len(entries)} posts in feed.")
+
           latest = entries[0]
 
-          def get_text(element, names):
-              for name in names:
-                  child = element.find(name)
-                  if child is not None and child.text:
-                      return child.text.strip()
+          def get_text(element, tag):
+              child = element.find(tag)
+
+              if child is not None and child.text:
+                  return child.text.strip()
+
               return ""
 
-          post_id = get_text(
-              latest,
-              [
-                  "id",
-                  "{http://www.w3.org/2005/Atom}id",
-                  "guid"
-              ]
-          )
-
-          title = get_text(
-              latest,
-              [
-                  "title",
-                  "{http://www.w3.org/2005/Atom}title"
-              ]
-          )
-
-          url = ""
-
-          link = latest.find("link")
-
-          if link is not None:
-              url = link.attrib.get("href", "")
-              if not url and link.text:
-                  url = link.text.strip()
-
-          if not url:
-              atom_link = latest.find("{http://www.w3.org/2005/Atom}link")
-              if atom_link is not None:
-                  url = atom_link.attrib.get("href", "")
+          post_id = get_text(latest, "guid")
+          title = get_text(latest, "title")
+          url = get_text(latest, "link")
 
           if not post_id:
               post_id = url or title
 
           if not post_id:
-              print("Instagram: could not identify post.")
+              print("Instagram: could not identify latest post.")
               raise SystemExit(0)
 
-          # Первый запуск: запоминаем последний пост,
-          # но не отправляем старые публикации.
           try:
               with open(state_file, "r", encoding="utf-8") as f:
                   last_id = f.read().strip()
