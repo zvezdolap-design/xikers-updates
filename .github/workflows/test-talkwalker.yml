@@ -18,10 +18,16 @@ jobs:
           curl -fsSL \
             --retry 3 \
             --retry-delay 3 \
-            "$TW_RSS_URL" \
-            -o talkwalker.xml
+            "$TW_SEEUN_YUJUN_RSS" \
+            -o seeun_yujun.xml
 
-          echo "Talkwalker RSS downloaded."
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 3 \
+            "$TW_YUJUN_SEEUN_RSS" \
+            -o yujun_seeun.xml
+
+          echo "Both Talkwalker RSS feeds downloaded."
 
           python - <<'PY'
           import json
@@ -29,67 +35,72 @@ jobs:
           import urllib.request
           import xml.etree.ElementTree as ET
 
-          root = ET.parse("talkwalker.xml").getroot()
-          items = root.findall(".//item")
+          feeds = [
+              ("SEEUN YUJUN", "seeun_yujun.xml"),
+              ("YUJUN SEEUN", "yujun_seeun.xml"),
+          ]
 
-          if not items:
-              print("No RSS items found.")
-              raise SystemExit(0)
+          for feed_name, filename in feeds:
+              print("\n" + "=" * 60)
+              print(feed_name)
+              print("=" * 60)
 
-          print(f"Found {len(items)} items.")
+              root = ET.parse(filename).getroot()
+              items = root.findall(".//item")
 
-          for index, item in enumerate(items[:5], start=1):
-              link = item.findtext("link", "").strip()
-              pub_date = item.findtext("pubDate", "").strip()
+              print(f"Found {len(items)} items.")
 
-              print("\n====================")
-              print(f"RESULT #{index}")
-              print("Talkwalker date:", pub_date)
-              print("Talkwalker link:", link)
+              for index, item in enumerate(items[:5], start=1):
+                  link = item.findtext("link", "").strip()
+                  pub_date = item.findtext("pubDate", "").strip()
 
-              match = re.search(r"/status/(\d+)", link)
+                  print("\n---")
+                  print(f"Result #{index}")
+                  print("Talkwalker date:", pub_date)
+                  print("Talkwalker link:", link)
 
-              if not match:
-                  print("Could not find tweet ID.")
-                  continue
+                  match = re.search(r"/status/(\d+)", link)
 
-              tweet_id = match.group(1)
+                  if not match:
+                      print("Could not find tweet ID.")
+                      continue
 
-              syndication_url = (
-                  "https://cdn.syndication.twimg.com/tweet-result"
-                  f"?id={tweet_id}&lang=en&token=0"
-              )
+                  tweet_id = match.group(1)
 
-              request = urllib.request.Request(
-                  syndication_url,
-                  headers={
-                      "User-Agent": "Mozilla/5.0",
-                      "Accept": "application/json",
-                  },
-              )
+                  syndication_url = (
+                      "https://cdn.syndication.twimg.com/tweet-result"
+                      f"?id={tweet_id}&lang=en&token=0"
+                  )
 
-              try:
-                  with urllib.request.urlopen(
-                      request,
-                      timeout=30
-                  ) as response:
-                      data = json.loads(
-                          response.read().decode("utf-8")
-                      )
-              except Exception as e:
-                  print("Syndication request failed:", e)
-                  continue
+                  request = urllib.request.Request(
+                      syndication_url,
+                      headers={
+                          "User-Agent": "Mozilla/5.0",
+                          "Accept": "application/json",
+                      },
+                  )
 
-              user = data.get("user") or {}
+                  try:
+                      with urllib.request.urlopen(
+                          request,
+                          timeout=30
+                      ) as response:
+                          data = json.loads(
+                              response.read().decode("utf-8")
+                          )
+                  except Exception as e:
+                      print("Syndication request failed:", e)
+                      continue
 
-              print("Tweet ID:", tweet_id)
-              print("Author:", user.get("screen_name", ""))
-              print("Created:", data.get("created_at", ""))
-              print("Text:")
-              print(data.get("text", ""))
+                  user = data.get("user") or {}
 
-              if data.get("mediaDetails"):
-                  print("Media: yes")
-              else:
-                  print("Media: no")
+                  print("Author:", user.get("screen_name", ""))
+                  print("Created:", data.get("created_at", ""))
+                  print("Text:")
+                  print(data.get("text", ""))
+
+                  print(
+                      "Media:",
+                      "yes" if data.get("mediaDetails") else "no"
+                  )
           PY
