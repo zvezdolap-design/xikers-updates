@@ -10,7 +10,8 @@ jobs:
     steps:
       - name: Fetch Talkwalker RSS
         env:
-          TW_RSS_URL: ${{ secrets.TW_SEEUN_YUJUN_RSS }}
+          TW_SEEUN_YUJUN_RSS: ${{ secrets.TW_SEEUN_YUJUN_RSS }}
+          TW_YUJUN_SEEUN_RSS: ${{ secrets.TW_YUJUN_SEEUN_RSS }}
         run: |
           set -euo pipefail
 
