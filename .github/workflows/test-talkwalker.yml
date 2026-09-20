@@ -1,0 +1,49 @@
+name: Test Talkwalker
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-talkwalker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Talkwalker RSS
+        env:
+          TW_RSS_URL: ${{ secrets.TW_SEEUN_YUJUN_RSS }}
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 3 \
+            "$TW_RSS_URL" \
+            -o talkwalker.xml
+
+          echo "Talkwalker RSS downloaded."
+
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("talkwalker.xml").getroot()
+
+          print("Root:", root.tag)
+
+          items = root.findall(".//item")
+
+          if not items:
+              print("No RSS items found.")
+              raise SystemExit(0)
+
+          print(f"Found {len(items)} items.")
+
+          for item in items[:10]:
+              title = item.findtext("title", "").strip()
+              link = item.findtext("link", "").strip()
+              pub_date = item.findtext("pubDate", "").strip()
+
+              print("\n---")
+              print("Title:", title)
+              print("Date:", pub_date)
+              print("Link:", link)
+          PY
