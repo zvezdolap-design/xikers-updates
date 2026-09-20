@@ -1,0 +1,255 @@
+name: Seeun Yujun monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seeun-yujun-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get repository
+        uses: actions/checkout@v4
+
+      - name: Check Talkwalker
+        env:
+          TW_RSS_URL: ${{ secrets.TW_SEEUN_YUJUN_RSS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 3 \
+            "$TW_RSS_URL" \
+            -o talkwalker.xml
+
+          python - <<'PY'
+          import json
+          import re
+          import urllib.parse
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          TELEGRAM_TOKEN = "${TELEGRAM_BOT_TOKEN}"
+          CHAT_ID = "${TELEGRAM_CHAT_ID}"
+
+          state_file = Path("seeun_yujun_seen.json")
+
+          blocked_words = [
+              "wts",
+              "wtb",
+              "sell",
+              "selling",
+              "buy",
+              "photocard",
+              "photo card",
+              "포카",
+              "포토카드",
+              "양도",
+              "거래",
+              "교환",
+              "판매",
+          ]
+
+          def get_tweet(link):
+              match = re.search(r"/status/(\d+)", link)
+
+              if not match:
+                  return None
+
+              tweet_id = match.group(1)
+
+              url = (
+                  "https://cdn.syndication.twimg.com/tweet-result"
+                  f"?id={tweet_id}&lang=en&token=0"
+              )
+
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0",
+                      "Accept": "application/json",
+                  },
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=30
+                  ) as response:
+                      data = json.loads(
+                          response.read().decode("utf-8")
+                      )
+              except Exception as e:
+                  print(f"Tweet {tweet_id}: failed to fetch text: {e}")
+                  return None
+
+              return {
+                  "id": tweet_id,
+                  "text": data.get("text", ""),
+                  "created_at": data.get("created_at", ""),
+                  "author": (data.get("user") or {}).get("screen_name", ""),
+                  "media": bool(data.get("mediaDetails")),
+                  "url": f"https://x.com/i/status/{tweet_id}",
+              }
+
+          def is_rejected(text):
+              normalized = text.lower()
+
+              for word in blocked_words:
+                  if word in normalized:
+                      return True, f"blocked:{word}"
+
+              return False, ""
+
+          root = ET.parse("talkwalker.xml").getroot()
+          items = root.findall(".//item")
+
+          if not items:
+              print("Talkwalker: no items.")
+              raise SystemExit(0)
+
+          current = []
+
+          for item in items:
+              link = item.findtext("link", "").strip()
+
+              if not link:
+                  continue
+
+              tweet = get_tweet(link)
+
+              if tweet is None:
+                  continue
+
+              current.append(tweet)
+
+          print(f"Talkwalker: fetched {len(current)} usable tweets.")
+
+          current_ids = [tweet["id"] for tweet in current]
+
+          if not state_file.exists():
+              state_file.write_text(
+                  json.dumps(
+                      current_ids,
+                      ensure_ascii=False,
+                      indent=2
+                  ),
+                  encoding="utf-8"
+              )
+
+              print(
+                  "Initialized state with "
+                  f"{len(current_ids)} existing tweets."
+              )
+
+              raise SystemExit(0)
+
+          try:
+              seen = set(
+                  json.loads(
+                      state_file.read_text(encoding="utf-8")
+                  )
+              )
+          except Exception:
+              seen = set()
+
+          new_tweets = [
+              tweet
+              for tweet in current
+              if tweet["id"] not in seen
+          ]
+
+          if not new_tweets:
+              print("Seeun/Yujun: no new tweets.")
+              raise SystemExit(0)
+
+          # RSS is newest first.
+          # Reverse so several new posts arrive in chronological order.
+          new_tweets.reverse()
+
+          updated_seen = set(seen)
+
+          for tweet in new_tweets:
+              rejected, reason = is_rejected(tweet["text"])
+
+              updated_seen.add(tweet["id"])
+
+              if rejected:
+                  print(
+                      f"REJECT {tweet['id']}: {reason}"
+                  )
+                  continue
+
+              message = "💞 Seeun × Yujun\n\n"
+              message += tweet["text"][:3000]
+              message += "\n\n"
+              message += tweet["url"]
+
+              telegram_url = (
+                  f"https://api.telegram.org/bot"
+                  f"{TELEGRAM_TOKEN}/sendMessage"
+              )
+
+              params = urllib.parse.urlencode({
+                  "chat_id": CHAT_ID,
+                  "text": message,
+              }).encode("utf-8")
+
+              request = urllib.request.Request(
+                  telegram_url,
+                  data=params,
+                  method="POST",
+              )
+
+              with urllib.request.urlopen(
+                  request,
+                  timeout=30
+              ) as response:
+                  result = response.read().decode("utf-8")
+
+              print(
+                  f"SENT {tweet['id']} "
+                  f"from @{tweet['author']}"
+              )
+
+          # Keep only the most recent 1000 IDs.
+          all_seen = list(updated_seen)[-1000:]
+
+          state_file.write_text(
+              json.dumps(
+                  all_seen,
+                  ensure_ascii=False,
+                  indent=2
+              ),
+              encoding="utf-8"
+          )
+
+          PY
+
+      - name: Save state
+        run: |
+          git config user.name "xikers-updates-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          git add seeun_yujun_seen.json
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+            exit 0
+          fi
+
+          git commit -m "Update Seeun Yujun monitor state"
+          git push
