@@ -155,11 +155,6 @@ jobs:
                       )
                   )
 
-                  if member_count >= 5:
-                      reasons.append(
-                          f"many-member-list:{member_count}"
-                      )
-
                   print("\n----------------------------------------")
                   print("Date:", pub_date)
                   print("Author:", tweet_id)
