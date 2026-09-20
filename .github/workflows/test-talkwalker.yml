@@ -23,12 +23,12 @@ jobs:
           echo "Talkwalker RSS downloaded."
 
           python - <<'PY'
+          import json
+          import re
+          import urllib.request
           import xml.etree.ElementTree as ET
 
           root = ET.parse("talkwalker.xml").getroot()
-
-          print("Root:", root.tag)
-
           items = root.findall(".//item")
 
           if not items:
@@ -37,20 +37,58 @@ jobs:
 
           print(f"Found {len(items)} items.")
 
-          for item in items[:10]:
-              title = item.findtext("title", "").strip()
+          for index, item in enumerate(items[:5], start=1):
               link = item.findtext("link", "").strip()
               pub_date = item.findtext("pubDate", "").strip()
-              description = item.findtext("description", "").strip()
-              encoded = item.findtext(
-                  "{http://purl.org/rss/1.0/modules/content/}encoded",
-                  ""
-              ).strip()
 
-              print("\n---")
-              print("Title:", title)
-              print("Date:", pub_date)
-              print("Link:", link)
-              print("Description:", description[:1000])
-              print("Content:", encoded[:1000])
+              print("\n====================")
+              print(f"RESULT #{index}")
+              print("Talkwalker date:", pub_date)
+              print("Talkwalker link:", link)
+
+              match = re.search(r"/status/(\d+)", link)
+
+              if not match:
+                  print("Could not find tweet ID.")
+                  continue
+
+              tweet_id = match.group(1)
+
+              syndication_url = (
+                  "https://cdn.syndication.twimg.com/tweet-result"
+                  f"?id={tweet_id}&lang=en&token=0"
+              )
+
+              request = urllib.request.Request(
+                  syndication_url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0",
+                      "Accept": "application/json",
+                  },
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=30
+                  ) as response:
+                      data = json.loads(
+                          response.read().decode("utf-8")
+                      )
+              except Exception as e:
+                  print("Syndication request failed:", e)
+                  continue
+
+              user = data.get("user") or {}
+
+              print("Tweet ID:", tweet_id)
+              print("Author:", user.get("screen_name", ""))
+              print("Created:", data.get("created_at", ""))
+              print("Text:")
+              print(data.get("text", ""))
+
+              if data.get("mediaDetails"):
+                  print("Media: yes")
+              else:
+                  print("Media: no")
           PY
