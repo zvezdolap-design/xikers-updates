@@ -107,7 +107,7 @@ jobs:
           request = urllib.request.Request(
               f"{API_URL}?{params}",
               headers={
-                  "Authorization": f"Bearer {API_KEY}",
+                  "X-API-Key": API_KEY,
                   "Accept": "application/json",
               },
               method="GET",
