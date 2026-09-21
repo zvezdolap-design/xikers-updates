@@ -130,18 +130,35 @@ jobs:
 
           if not STATE_FILE.exists():
               STATE_FILE.write_text(
-                  json.dumps([], ensure_ascii=False, indent=2),
+                  json.dumps(
+                      {
+                          "pair": [],
+                          "xikers": [],
+                          "seeun_fromm": [],
+                          "yujun_fromm": []
+                      },
+                      ensure_ascii=False,
+                      indent=2
+                  ),
                   encoding="utf-8"
               )
 
+              print("State initialized.")
+              raise SystemExit(0)
+
           try:
-              seen = set(
-                  json.loads(
-                      STATE_FILE.read_text(encoding="utf-8")
-                  )
+              state = json.loads(
+                  STATE_FILE.read_text(encoding="utf-8")
               )
           except Exception:
-              seen = set()
+              state = {
+                  "pair": [],
+                  "xikers": [],
+                  "seeun_fromm": [],
+                  "yujun_fromm": []
+              }
+
+          seen = set(state.get(category, []))
 
           blocked_words = [
               "wts",
@@ -351,11 +368,11 @@ jobs:
               )
 
           # Keep state bounded.
-          recent_ids = list(updated_seen)[-3000:]
+          state[category] = list(updated_seen)[-1000:]
 
           STATE_FILE.write_text(
               json.dumps(
-                  recent_ids,
+                  state,
                   ensure_ascii=False,
                   indent=2
               ),
