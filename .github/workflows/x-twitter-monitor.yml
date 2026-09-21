@@ -2,7 +2,7 @@ name: X monitor
 
 on:
   schedule:
-    - cron: "0 0,3,6,9,12,15,18,21 * * *"
+    - cron: "0 0,2,5,7,10,12,15,17,20,22 * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,8 +33,8 @@ jobs:
           import os
           import urllib.parse
           import urllib.request
-          from datetime import datetime, timezone
           from pathlib import Path
+          from datetime import datetime, timezone
 
           API_KEY = os.environ["TWTAPI_API_KEY"]
           TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -42,70 +42,88 @@ jobs:
 
           STATE_FILE = Path("x_search_seen.json")
 
+          # ------------------------------------------------------------
+          # Decide which category this scheduled run handles.
+          # GitHub cron uses UTC.
+          # ------------------------------------------------------------
+
+          current_hour = datetime.now(timezone.utc).hour
+
+          category_by_hour = {
+              0: "pair",
+              2: "xikers",
+              5: "seeun_fromm",
+              7: "yujun_fromm",
+              10: "pair",
+              12: "xikers",
+              15: "seeun_fromm",
+              17: "yujun_fromm",
+              20: "pair",
+              22: "xikers",
+          }
+
+          category = category_by_hour.get(current_hour)
+
+          if category is None:
+              print(f"No category for UTC hour {current_hour}.")
+              raise SystemExit(0)
+
+          # ------------------------------------------------------------
+          # Search queries.
+          # Keep them separate so one noisy category cannot consume
+          # the entire page of results from another category.
+          # ------------------------------------------------------------
+
           queries = {
               "pair": (
                   '("Seeun Yujun" OR "Yujun Seeun" '
                   'OR "세은 유준" OR "유준 세은" '
                   'OR "Сэын Юджун" OR "Юджун Сэын" '
-                  'OR "SeeJun")'
+                  'OR "SeeJun" OR "Сэджуны") '
+                  '-is:retweet'
               ),
 
               "xikers": (
                   '("xikers" OR "싸이커스") '
                   '(comeback OR album OR release OR concert OR tour '
                   'OR festival OR performance OR award OR interview '
-                  'OR magazine OR "music show" '
-                  'OR 컴백 OR 앨범 OR 발매 OR 콘서트 OR 투어 '
-                  'OR 페스티벌 OR 공연 OR 시상식 OR 인터뷰 OR 잡지)'
+                  OR magazine OR appearance OR schedule OR show '
+                  OR "music show" '
+                  OR 컴백 OR 앨범 OR 발매 OR 콘서트 OR 투어 '
+                  OR 페스티벌 OR 공연 OR 시상식 OR 인터뷰 '
+                  OR 잡지 OR 화보 OR 출연 OR 일정 OR 스케줄 '
+                  OR 방송 OR 음방 OR 팬미팅) '
+                  '-is:retweet'
               ),
 
               "seeun_fromm": (
                   '("Seeun" OR "세은" OR "Сэын") '
-                  '(Fromm OR "프롬")'
+                  '(Fromm OR "프롬") '
+                  '-is:retweet'
               ),
 
               "yujun_fromm": (
                   '("Yujun" OR "유준" OR "Юджун") '
-                  '(Fromm OR "프롬")'
+                  '(Fromm OR "프롬") '
+                  '-is:retweet'
               ),
           }
 
-          now = datetime.now(timezone.utc)
-          hour = now.hour
-
-          category_by_hour = {
-              0: "pair",
-              3: "xikers",
-              6: "seeun_fromm",
-              9: "yujun_fromm",
-              12: "pair",
-              15: "xikers",
-              18: "seeun_fromm",
-              21: "yujun_fromm",
-          }
-
-          category = category_by_hour.get(hour)
-
-          if category is None:
-              print(f"No category assigned for UTC hour {hour}.")
-              raise SystemExit(0)
-
           query = queries[category]
 
-          print(f"UTC hour: {hour}")
+          print(f"UTC hour: {current_hour}")
           print(f"Category: {category}")
           print(f"Query: {query}")
 
-          API_URL = "https://api.twtapi.com/api/v1/twitter/Search"
+          # ------------------------------------------------------------
+          # Check remaining monthly quota.
+          # This endpoint does not consume a Search call.
+          # ------------------------------------------------------------
 
-          params = urllib.parse.urlencode({
-              "q": query,
-              "type": "Latest",
-              "count": "20",
-          })
+          status_url = "https://api.twtapi.com/myapi/status"
 
-          request = urllib.request.Request(
-              f"{API_URL}?{params}",
+          status_request = urllib.request.Request(
+              status_url,
               headers={
                   "X-API-Key": API_KEY,
                   "Accept": "application/json",
@@ -113,70 +131,119 @@ jobs:
               method="GET",
           )
 
-          print("Searching X...")
-
           with urllib.request.urlopen(
-              request,
-              timeout=60
+              status_request,
+              timeout=30
           ) as response:
-              payload = json.loads(
+              status_data = json.loads(
                   response.read().decode("utf-8")
               )
+
+          account = status_data.get("data", {})
+
+          remaining = account.get("monthly_remaining")
+
+          print(f"TwtAPI monthly remaining: {remaining}")
+
+          if remaining is not None and int(remaining) <= 0:
+              print("Monthly TwtAPI quota exhausted. Skipping this run.")
+              raise SystemExit(0)
+
+          # ------------------------------------------------------------
+          # Search.
+          # IMPORTANT: Search uses Bearer authentication.
+          # ------------------------------------------------------------
+
+          api_url = "https://api.twtapi.com/api/v1/twitter/Search"
+
+          params = urllib.parse.urlencode({
+              "q": query,
+              "type": "Latest",
+              "count": "20",
+          })
+
+          search_request = urllib.request.Request(
+              f"{api_url}?{params}",
+              headers={
+                  "Authorization": f"Bearer {API_KEY}",
+                  "Accept": "application/json",
+              },
+              method="GET",
+          )
+
+          print("Searching X...")
+
+          try:
+              with urllib.request.urlopen(
+                  search_request,
+                  timeout=60
+              ) as response:
+                  payload = json.loads(
+                      response.read().decode("utf-8")
+                  )
+          except urllib.error.HTTPError as error:
+              body = error.read().decode(
+                  "utf-8",
+                  errors="replace"
+              )
+
+              print(f"TwtAPI HTTP {error.code}")
+              print(body)
+
+              # Do not kill the whole scheduled system over one
+              # temporary API failure.
+              if error.code in (401, 403, 429, 500, 502, 503):
+                  raise SystemExit(0)
+
+              raise
 
           normalized = payload.get("_normalized", {})
           tweets = normalized.get("tweets", [])
 
           print(f"Received {len(tweets)} tweets.")
 
+          # ------------------------------------------------------------
+          # State format:
+          # {
+          #   "pair": [...],
+          #   "xikers": [...],
+          #   "seeun_fromm": [...],
+          #   "yujun_fromm": [...]
+          # }
+          # ------------------------------------------------------------
+
           if not STATE_FILE.exists():
-              STATE_FILE.write_text(
-                  json.dumps(
-                      {
-                          "pair": [],
-                          "xikers": [],
-                          "seeun_fromm": [],
-                          "yujun_fromm": []
-                      },
-                      ensure_ascii=False,
-                      indent=2
-                  ),
-                  encoding="utf-8"
-              )
-
-              print("State initialized.")
-              raise SystemExit(0)
-
-          try:
-              state = json.loads(
-                  STATE_FILE.read_text(encoding="utf-8")
-              )
-          except Exception:
               state = {
                   "pair": [],
                   "xikers": [],
                   "seeun_fromm": [],
-                  "yujun_fromm": []
+                  "yujun_fromm": [],
               }
+          else:
+              try:
+                  state = json.loads(
+                      STATE_FILE.read_text(
+                          encoding="utf-8"
+                      )
+                  )
+
+                  if not isinstance(state, dict):
+                      raise ValueError("Invalid state format.")
+
+              except Exception:
+                  state = {
+                      "pair": [],
+                      "xikers": [],
+                      "seeun_fromm": [],
+                      "yujun_fromm": [],
+                  }
 
           seen = set(state.get(category, []))
 
-          blocked_words = [
-              "wts",
-              "wtb",
-              "sell",
-              "selling",
-              "photocard",
-              "photo card",
-              "pob",
-              "pcs",
-              "포카",
-              "포토카드",
-              "포토 카드",
-              "양도",
-              "거래",
-              "교환",
-              "판매",
-          ]
+          # ------------------------------------------------------------
+          # Extract tweet data from TwtAPI normalized response.
+          # Handles normal tweets and TweetWithVisibilityResults.
+          # ------------------------------------------------------------
 
           def extract_tweet(item):
               tweet_id = str(item.get("rest_id", ""))
@@ -184,7 +251,7 @@ jobs:
               result = item.get("result") or {}
 
               if result.get("tweet"):
-                  result = result["tweet"] or {}
+                  result = result.get("tweet") or {}
 
               legacy = result.get("legacy") or {}
 
@@ -201,11 +268,17 @@ jobs:
                   .get("result", {})
               ) or {}
 
-              user_core = user_result.get("core", {}) or {}
+              user_core = user_result.get("core") or {}
 
-              author = user_core.get("screen_name", "")
+              author = user_core.get(
+                  "screen_name",
+                  ""
+              )
 
-              created_at = legacy.get("created_at", "")
+              created_at = legacy.get(
+                  "created_at",
+                  ""
+              )
 
               if not tweet_id or not text:
                   return None
@@ -220,6 +293,30 @@ jobs:
                   ),
               }
 
+          # ------------------------------------------------------------
+          # Filters.
+          # ------------------------------------------------------------
+
+          blocked_words = [
+              "wts",
+              "wtb",
+              "sell",
+              "selling",
+              "buy",
+              "photocard",
+              "photo card",
+              "photo-card",
+              "pob",
+              "pcs",
+              "포카",
+              "포토카드",
+              "포토 카드",
+              "양도",
+              "거래",
+              "교환",
+              "판매",
+          ]
+
           def is_trade(text):
               normalized = text.lower()
 
@@ -229,60 +326,66 @@ jobs:
 
               return False, ""
 
-          def category_ok(category, text):
+          def category_matches(text):
               normalized = text.lower()
 
               if category == "pair":
+                  has_seeun = (
+                      "seeun" in normalized
+                      or "세은" in normalized
+                      or "сэын" in normalized
+                  )
+
+                  has_yujun = (
+                      "yujun" in normalized
+                      or "유준" in normalized
+                      or "юджун" in normalized
+                  )
+
+                  has_pair_name = (
+                      "seejun" in normalized
+                      or "сэджуны" in normalized
+                  )
+
                   return (
-                      (
-                          ("seeun" in normalized or "세은" in normalized or "сэын" in normalized)
-                          and
-                          ("yujun" in normalized or "유준" in normalized or "юджун" in normalized)
-                      )
+                      (has_seeun and has_yujun)
+                      or has_pair_name
                   )
 
               if category == "xikers":
-                  event_words = [
-                      "comeback",
-                      "album",
-                      "release",
-                      "concert",
-                      "tour",
-                      "festival",
-                      "performance",
-                      "award",
-                      "interview",
-                      "magazine",
-                      "music show",
-                      "컴백",
-                      "앨범",
-                      "발매",
-                      "콘서트",
-                      "투어",
-                      "페스티벌",
-                      "공연",
-                      "시상식",
-                      "인터뷰",
-                      "잡지",
-                  ]
-
+                  # The search query already requires event-related
+                  # context, so here we only confirm group presence.
                   return (
-                      ("xikers" in normalized or "싸이커스" in normalized)
-                      and any(word in normalized for word in event_words)
+                      "xikers" in normalized
+                      or "싸이커스" in normalized
                   )
 
               if category == "seeun_fromm":
                   return (
-                      ("seeun" in normalized or "세은" in normalized or "сэын" in normalized)
+                      (
+                          "seeun" in normalized
+                          or "세은" in normalized
+                          or "сэын" in normalized
+                      )
                       and
-                      ("fromm" in normalized or "프롬" in normalized)
+                      (
+                          "fromm" in normalized
+                          or "프롬" in normalized
+                      )
                   )
 
               if category == "yujun_fromm":
                   return (
-                      ("yujun" in normalized or "유준" in normalized or "юджун" in normalized)
+                      (
+                          "yujun" in normalized
+                          or "유준" in normalized
+                          or "юджун" in normalized
+                      )
                       and
-                      ("fromm" in normalized or "프롬" in normalized)
+                      (
+                          "fromm" in normalized
+                          or "프롬" in normalized
+                      )
                   )
 
               return False
@@ -303,7 +406,7 @@ jobs:
           print(f"New unseen tweets: {len(new_tweets)}")
 
           # API returns newest first.
-          # Send oldest first if several new posts were found.
+          # Send oldest first when there are several.
           new_tweets.reverse()
 
           updated_seen = set(seen)
@@ -311,7 +414,9 @@ jobs:
           for tweet in new_tweets:
               updated_seen.add(tweet["id"])
 
-              trade, reason = is_trade(tweet["text"])
+              trade, reason = is_trade(
+                  tweet["text"]
+              )
 
               if trade:
                   print(
@@ -319,7 +424,9 @@ jobs:
                   )
                   continue
 
-              if not category_ok(category, tweet["text"]):
+              if not category_matches(
+                  tweet["text"]
+              ):
                   print(
                       f"REJECT {tweet['id']}: "
                       "category filter"
@@ -335,10 +442,11 @@ jobs:
               else:
                   label = "💬 Yujun / Fromm"
 
-              message = f"{label}\n\n"
-              message += tweet["text"][:3500]
-              message += "\n\n"
-              message += tweet["url"]
+              message = (
+                  f"{label}\n\n"
+                  f"{tweet['text'][:3500]}\n\n"
+                  f"{tweet['url']}"
+              )
 
               telegram_url = (
                   f"https://api.telegram.org/bot"
@@ -367,8 +475,10 @@ jobs:
                   f"from @{tweet['author']}"
               )
 
-          # Keep state bounded.
-          state[category] = list(updated_seen)[-1000:]
+          # Keep the state for this category bounded.
+          state[category] = list(
+              updated_seen
+          )[-1000:]
 
           STATE_FILE.write_text(
               json.dumps(
