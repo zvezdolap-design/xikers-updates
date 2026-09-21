@@ -1,0 +1,20 @@
+name: Test TwtAPI auth
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check TwtAPI account
+        env:
+          TWTAPI_API_KEY: ${{ secrets.TWTAPI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            -H "X-API-Key: $TWTAPI_API_KEY" \
+            -H "Accept: application/json" \
+            "https://api.twtapi.com/api-proxy/myapi/status?lang=en"
