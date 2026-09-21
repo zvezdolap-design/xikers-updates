@@ -2,7 +2,7 @@ name: X monitor
 
 on:
   schedule:
-    - cron: "17 */3 * * *"
+    - cron: "0 0,3,6,9,12,15,18,21 * * *"
   workflow_dispatch:
 
 permissions:
@@ -31,9 +31,9 @@ jobs:
           python - <<'PY'
           import json
           import os
-          import re
           import urllib.parse
           import urllib.request
+          from datetime import datetime, timezone
           from pathlib import Path
 
           API_KEY = os.environ["TWTAPI_API_KEY"]
@@ -42,30 +42,64 @@ jobs:
 
           STATE_FILE = Path("x_search_seen.json")
 
-          SEARCH_QUERY = r'''
-          (
-            "Seeun Yujun"
-            OR "Yujun Seeun"
-            OR "세은 유준"
-            OR "유준 세은"
-            OR "Сэын Юджун"
-            OR "Юджун Сэын"
-            OR "SeeJun"
-            OR "xikers"
-            OR "싸이커스"
-            OR "Seeun Fromm"
-            OR "Yujun Fromm"
-            OR "세은 프롬"
-            OR "유준 프롬"
-            OR "세은 유준 프롬"
-            OR "유준 세은 프롬"
-          )
-          '''
+          queries = {
+              "pair": (
+                  '("Seeun Yujun" OR "Yujun Seeun" '
+                  'OR "세은 유준" OR "유준 세은" '
+                  'OR "Сэын Юджун" OR "Юджун Сэын" '
+                  'OR "SeeJun")'
+              ),
+
+              "xikers": (
+                  '("xikers" OR "싸이커스") '
+                  '(comeback OR album OR release OR concert OR tour '
+                  'OR festival OR performance OR award OR interview '
+                  'OR magazine OR "music show" '
+                  'OR 컴백 OR 앨범 OR 발매 OR 콘서트 OR 투어 '
+                  'OR 페스티벌 OR 공연 OR 시상식 OR 인터뷰 OR 잡지)'
+              ),
+
+              "seeun_fromm": (
+                  '("Seeun" OR "세은" OR "Сэын") '
+                  '(Fromm OR "프롬")'
+              ),
+
+              "yujun_fromm": (
+                  '("Yujun" OR "유준" OR "Юджун") '
+                  '(Fromm OR "프롬")'
+              ),
+          }
+
+          now = datetime.now(timezone.utc)
+          hour = now.hour
+
+          category_by_hour = {
+              0: "pair",
+              3: "xikers",
+              6: "seeun_fromm",
+              9: "yujun_fromm",
+              12: "pair",
+              15: "xikers",
+              18: "seeun_fromm",
+              21: "yujun_fromm",
+          }
+
+          category = category_by_hour.get(hour)
+
+          if category is None:
+              print(f"No category assigned for UTC hour {hour}.")
+              raise SystemExit(0)
+
+          query = queries[category]
+
+          print(f"UTC hour: {hour}")
+          print(f"Category: {category}")
+          print(f"Query: {query}")
 
           API_URL = "https://api.twtapi.com/api/v1/twitter/Search"
 
           params = urllib.parse.urlencode({
-              "q": SEARCH_QUERY,
+              "q": query,
               "type": "Latest",
               "count": "20",
           })
@@ -114,7 +148,6 @@ jobs:
               "wtb",
               "sell",
               "selling",
-              "buy",
               "photocard",
               "photo card",
               "pob",
@@ -128,35 +161,30 @@ jobs:
               "판매",
           ]
 
-          member_names = [
-              "minjae",
-              "junmin",
-              "sumin",
-              "jinsik",
-              "hyunwoo",
-              "seeun",
-              "yujun",
-              "hunter",
-              "yechan",
-              "junghoon",
-          ]
-
           def extract_tweet(item):
               tweet_id = str(item.get("rest_id", ""))
 
               result = item.get("result") or {}
 
+              if result.get("tweet"):
+                  result = result["tweet"] or {}
+
               legacy = result.get("legacy") or {}
 
-              # Some responses wrap the tweet one level deeper.
-              if not legacy and result.get("tweet"):
-                  result = result.get("tweet") or {}
-                  legacy = result.get("legacy") or {}
+              text = (
+                  legacy.get("full_text")
+                  or legacy.get("text")
+                  or ""
+              )
 
-              text = legacy.get("full_text") or legacy.get("text") or ""
+              user_result = (
+                  result
+                  .get("core", {})
+                  .get("user_results", {})
+                  .get("result", {})
+              ) or {}
 
-              user = result.get("core", {}).get("user_results", {}).get("result", {}) or {}
-              user_core = user.get("core", {}) or {}
+              user_core = user_result.get("core", {}) or {}
 
               author = user_core.get("screen_name", "")
 
@@ -170,19 +198,79 @@ jobs:
                   "text": text,
                   "author": author,
                   "created_at": created_at,
-                  "url": f"https://x.com/{author}/status/{tweet_id}"
+                  "url": (
+                      f"https://x.com/{author}/status/{tweet_id}"
+                  ),
               }
 
-          def classify(text):
+          def is_trade(text):
               normalized = text.lower()
 
               for word in blocked_words:
                   if word in normalized:
-                      return "REJECT", f"blocked:{word}"
+                      return True, f"blocked:{word}"
 
-              return "KEEP", ""
+              return False, ""
 
-          results = []
+          def category_ok(category, text):
+              normalized = text.lower()
+
+              if category == "pair":
+                  return (
+                      (
+                          ("seeun" in normalized or "세은" in normalized or "сэын" in normalized)
+                          and
+                          ("yujun" in normalized or "유준" in normalized or "юджун" in normalized)
+                      )
+                  )
+
+              if category == "xikers":
+                  event_words = [
+                      "comeback",
+                      "album",
+                      "release",
+                      "concert",
+                      "tour",
+                      "festival",
+                      "performance",
+                      "award",
+                      "interview",
+                      "magazine",
+                      "music show",
+                      "컴백",
+                      "앨범",
+                      "발매",
+                      "콘서트",
+                      "투어",
+                      "페스티벌",
+                      "공연",
+                      "시상식",
+                      "인터뷰",
+                      "잡지",
+                  ]
+
+                  return (
+                      ("xikers" in normalized or "싸이커스" in normalized)
+                      and any(word in normalized for word in event_words)
+                  )
+
+              if category == "seeun_fromm":
+                  return (
+                      ("seeun" in normalized or "세은" in normalized or "сэын" in normalized)
+                      and
+                      ("fromm" in normalized or "프롬" in normalized)
+                  )
+
+              if category == "yujun_fromm":
+                  return (
+                      ("yujun" in normalized or "유준" in normalized or "юджун" in normalized)
+                      and
+                      ("fromm" in normalized or "프롬" in normalized)
+                  )
+
+              return False
+
+          new_tweets = []
 
           for item in tweets:
               tweet = extract_tweet(item)
@@ -193,56 +281,44 @@ jobs:
               if tweet["id"] in seen:
                   continue
 
-              results.append(tweet)
+              new_tweets.append(tweet)
 
-          print(f"New unseen tweets: {len(results)}")
+          print(f"New unseen tweets: {len(new_tweets)}")
 
-          # Latest results first, so send oldest -> newest.
-          results.reverse()
+          # API returns newest first.
+          # Send oldest first if several new posts were found.
+          new_tweets.reverse()
 
           updated_seen = set(seen)
 
-          for tweet in results:
-              status, reason = classify(tweet["text"])
-
+          for tweet in new_tweets:
               updated_seen.add(tweet["id"])
 
-              if status == "REJECT":
+              trade, reason = is_trade(tweet["text"])
+
+              if trade:
                   print(
                       f"REJECT {tweet['id']}: {reason}"
                   )
                   continue
 
-              text_lower = tweet["text"].lower()
+              if not category_ok(category, tweet["text"]):
+                  print(
+                      f"REJECT {tweet['id']}: "
+                      "category filter"
+                  )
+                  continue
 
-              if (
-                  ("seeun" in text_lower or "세은" in text_lower or "сэын" in text_lower)
-                  and
-                  ("yujun" in text_lower or "유준" in text_lower or "юджун" in text_lower)
-              ):
-                  category = "💞 Seeun × Yujun"
-              elif (
-                  "fromm" in text_lower
-                  or "프롬" in text_lower
-              ):
-                  if (
-                      "seeun" in text_lower
-                      or "세은" in text_lower
-                      or "сэын" in text_lower
-                  ):
-                      category = "💬 Seeun / Fromm"
-                  elif (
-                      "yujun" in text_lower
-                      or "유준" in text_lower
-                      or "юджун" in text_lower
-                  ):
-                      category = "💬 Yujun / Fromm"
-                  else:
-                      category = "📰 Xikers"
+              if category == "pair":
+                  label = "💞 Seeun × Yujun"
+              elif category == "xikers":
+                  label = "📰 Xikers"
+              elif category == "seeun_fromm":
+                  label = "💬 Seeun / Fromm"
               else:
-                  category = "📰 Xikers"
+                  label = "💬 Yujun / Fromm"
 
-              message = f"{category}\n\n"
+              message = f"{label}\n\n"
               message += tweet["text"][:3500]
               message += "\n\n"
               message += tweet["url"]
@@ -274,18 +350,18 @@ jobs:
                   f"from @{tweet['author']}"
               )
 
-          # Keep the state bounded.
-          combined = list(updated_seen)
-          combined = combined[-2000:]
+          # Keep state bounded.
+          recent_ids = list(updated_seen)[-3000:]
 
           STATE_FILE.write_text(
               json.dumps(
-                  combined,
+                  recent_ids,
                   ensure_ascii=False,
                   indent=2
               ),
               encoding="utf-8"
           )
+
           PY
 
       - name: Save state
