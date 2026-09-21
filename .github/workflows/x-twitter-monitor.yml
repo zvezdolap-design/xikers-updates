@@ -1,0 +1,304 @@
+name: X monitor
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: x-twitter-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get repository
+        uses: actions/checkout@v4
+
+      - name: Search X
+        env:
+          TWTAPI_API_KEY: ${{ secrets.TWTAPI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          API_KEY = os.environ["TWTAPI_API_KEY"]
+          TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+          CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+          STATE_FILE = Path("x_search_seen.json")
+
+          SEARCH_QUERY = r'''
+          (
+            "Seeun Yujun"
+            OR "Yujun Seeun"
+            OR "세은 유준"
+            OR "유준 세은"
+            OR "Сэын Юджун"
+            OR "Юджун Сэын"
+            OR "SeeJun"
+            OR "xikers"
+            OR "싸이커스"
+            OR "Seeun Fromm"
+            OR "Yujun Fromm"
+            OR "세은 프롬"
+            OR "유준 프롬"
+            OR "세은 유준 프롬"
+            OR "유준 세은 프롬"
+          )
+          '''
+
+          API_URL = "https://api.twtapi.com/api/v1/twitter/Search"
+
+          params = urllib.parse.urlencode({
+              "q": SEARCH_QUERY,
+              "type": "Latest",
+              "count": "20",
+          })
+
+          request = urllib.request.Request(
+              f"{API_URL}?{params}",
+              headers={
+                  "Authorization": f"Bearer {API_KEY}",
+                  "Accept": "application/json",
+              },
+              method="GET",
+          )
+
+          print("Searching X...")
+
+          with urllib.request.urlopen(
+              request,
+              timeout=60
+          ) as response:
+              payload = json.loads(
+                  response.read().decode("utf-8")
+              )
+
+          normalized = payload.get("_normalized", {})
+          tweets = normalized.get("tweets", [])
+
+          print(f"Received {len(tweets)} tweets.")
+
+          if not STATE_FILE.exists():
+              STATE_FILE.write_text(
+                  json.dumps([], ensure_ascii=False, indent=2),
+                  encoding="utf-8"
+              )
+
+          try:
+              seen = set(
+                  json.loads(
+                      STATE_FILE.read_text(encoding="utf-8")
+                  )
+              )
+          except Exception:
+              seen = set()
+
+          blocked_words = [
+              "wts",
+              "wtb",
+              "sell",
+              "selling",
+              "buy",
+              "photocard",
+              "photo card",
+              "pob",
+              "pcs",
+              "포카",
+              "포토카드",
+              "포토 카드",
+              "양도",
+              "거래",
+              "교환",
+              "판매",
+          ]
+
+          member_names = [
+              "minjae",
+              "junmin",
+              "sumin",
+              "jinsik",
+              "hyunwoo",
+              "seeun",
+              "yujun",
+              "hunter",
+              "yechan",
+              "junghoon",
+          ]
+
+          def extract_tweet(item):
+              tweet_id = str(item.get("rest_id", ""))
+
+              result = item.get("result") or {}
+
+              legacy = result.get("legacy") or {}
+
+              # Some responses wrap the tweet one level deeper.
+              if not legacy and result.get("tweet"):
+                  result = result.get("tweet") or {}
+                  legacy = result.get("legacy") or {}
+
+              text = legacy.get("full_text") or legacy.get("text") or ""
+
+              user = result.get("core", {}).get("user_results", {}).get("result", {}) or {}
+              user_core = user.get("core", {}) or {}
+
+              author = user_core.get("screen_name", "")
+
+              created_at = legacy.get("created_at", "")
+
+              if not tweet_id or not text:
+                  return None
+
+              return {
+                  "id": tweet_id,
+                  "text": text,
+                  "author": author,
+                  "created_at": created_at,
+                  "url": f"https://x.com/{author}/status/{tweet_id}"
+              }
+
+          def classify(text):
+              normalized = text.lower()
+
+              for word in blocked_words:
+                  if word in normalized:
+                      return "REJECT", f"blocked:{word}"
+
+              return "KEEP", ""
+
+          results = []
+
+          for item in tweets:
+              tweet = extract_tweet(item)
+
+              if tweet is None:
+                  continue
+
+              if tweet["id"] in seen:
+                  continue
+
+              results.append(tweet)
+
+          print(f"New unseen tweets: {len(results)}")
+
+          # Latest results first, so send oldest -> newest.
+          results.reverse()
+
+          updated_seen = set(seen)
+
+          for tweet in results:
+              status, reason = classify(tweet["text"])
+
+              updated_seen.add(tweet["id"])
+
+              if status == "REJECT":
+                  print(
+                      f"REJECT {tweet['id']}: {reason}"
+                  )
+                  continue
+
+              text_lower = tweet["text"].lower()
+
+              if (
+                  ("seeun" in text_lower or "세은" in text_lower or "сэын" in text_lower)
+                  and
+                  ("yujun" in text_lower or "유준" in text_lower or "юджун" in text_lower)
+              ):
+                  category = "💞 Seeun × Yujun"
+              elif (
+                  "fromm" in text_lower
+                  or "프롬" in text_lower
+              ):
+                  if (
+                      "seeun" in text_lower
+                      or "세은" in text_lower
+                      or "сэын" in text_lower
+                  ):
+                      category = "💬 Seeun / Fromm"
+                  elif (
+                      "yujun" in text_lower
+                      or "유준" in text_lower
+                      or "юджун" in text_lower
+                  ):
+                      category = "💬 Yujun / Fromm"
+                  else:
+                      category = "📰 Xikers"
+              else:
+                  category = "📰 Xikers"
+
+              message = f"{category}\n\n"
+              message += tweet["text"][:3500]
+              message += "\n\n"
+              message += tweet["url"]
+
+              telegram_url = (
+                  f"https://api.telegram.org/bot"
+                  f"{TELEGRAM_TOKEN}/sendMessage"
+              )
+
+              telegram_data = urllib.parse.urlencode({
+                  "chat_id": CHAT_ID,
+                  "text": message,
+              }).encode("utf-8")
+
+              telegram_request = urllib.request.Request(
+                  telegram_url,
+                  data=telegram_data,
+                  method="POST",
+              )
+
+              with urllib.request.urlopen(
+                  telegram_request,
+                  timeout=30
+              ) as response:
+                  response.read()
+
+              print(
+                  f"SENT {tweet['id']} "
+                  f"from @{tweet['author']}"
+              )
+
+          # Keep the state bounded.
+          combined = list(updated_seen)
+          combined = combined[-2000:]
+
+          STATE_FILE.write_text(
+              json.dumps(
+                  combined,
+                  ensure_ascii=False,
+                  indent=2
+              ),
+              encoding="utf-8"
+          )
+          PY
+
+      - name: Save state
+        run: |
+          git config user.name "xikers-updates-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          git add x_search_seen.json
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+            exit 0
+          fi
+
+          git commit -m "Update X search state"
+          git push
