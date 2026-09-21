@@ -87,12 +87,12 @@ jobs:
                   '("xikers" OR "싸이커스") '
                   '(comeback OR album OR release OR concert OR tour '
                   'OR festival OR performance OR award OR interview '
-                  OR magazine OR appearance OR schedule OR show '
-                  OR "music show" '
-                  OR 컴백 OR 앨범 OR 발매 OR 콘서트 OR 투어 '
-                  OR 페스티벌 OR 공연 OR 시상식 OR 인터뷰 '
-                  OR 잡지 OR 화보 OR 출연 OR 일정 OR 스케줄 '
-                  OR 방송 OR 음방 OR 팬미팅) '
+                  'OR magazine OR appearance OR schedule OR show '
+                  'OR "music show" OR 컴백 OR 앨범 OR 발매 '
+                  'OR 콘서트 OR 투어 OR 페스티벌 OR 공연 '
+                  'OR 시상식 OR 인터뷰 OR 잡지 OR 화보 '
+                  'OR 출연 OR 일정 OR 스케줄 OR 방송 OR 음방 '
+                  'OR 팬미팅) '
                   '-is:retweet'
               ),
 
